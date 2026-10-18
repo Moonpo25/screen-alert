@@ -100,6 +100,7 @@ class ScreenAlertService : Service() {
                 bmp.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(bmp, 0, 0, sw, sh)
                 processBitmap(cropped)
+                bmp.recycle()
             } catch (_: Exception) {
                 busy = false
             } finally {
@@ -110,28 +111,60 @@ class ScreenAlertService : Service() {
 
     private fun processBitmap(bmp: Bitmap) {
         val words = repo.load().filter { it.enabled }
-        if (words.isEmpty()) { busy = false; return }
+        if (words.isEmpty()) {
+            bmp.recycle()
+            busy = false
+            return
+        }
         val input = InputImage.fromBitmap(bmp, 0)
         recognizer.process(input)
             .addOnSuccessListener { result ->
-                checkWords(normalize(result.text), words)
+                val text = result.text
+                // 1. تحديث الإشعار عشان نشوف شنو التطبيق قاري بالضبط
+                showDebugNotification(text)
+                // 2. فحص الكلمات
+                try {
+                    checkWords(normalize(text), words)
+                } finally {
+                    busy = false
+                    bmp.recycle()
+                }
             }
             .addOnFailureListener {
                 busy = false
+                bmp.recycle()
             }
+    }
+
+    private fun showDebugNotification(text: String) {
+        try {
+            val debugText = if (text.isBlank()) "لم يتم قراءة أي نص (شاشة سودة؟)" else text.take(100)
+            val debugNotif = Notification.Builder(this, "alert")
+                .setContentTitle("النص اللي شافه التطبيق:")
+                .setContentText(debugText)
+                .setStyle(Notification.BigTextStyle().bigText(debugText))
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .build()
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(2, debugNotif)
+        } catch (_: Exception) { }
     }
 
     private fun checkWords(ocr: String, words: List<WordEntry>) {
         val now = System.currentTimeMillis()
+        
+        // هسه نشيل كل المسافات من النص اللي التطبيق قراه
+        val cleanOcr = ocr.replace(Regex("\\s+"), "")
+
         for (w in words) {
-            val key = normalize(w.text)
-            if (key.isBlank() || !ocr.contains(key)) continue
+            val cleanKey = normalize(w.text).replace(Regex("\\s+"), "")
+            if (cleanKey.isBlank() || !cleanOcr.contains(cleanKey)) continue
+            
             val last = lastPlayed[w.text] ?: 0L
             if (now - last < w.cooldown * 1000L) continue
             lastPlayed[w.text] = now
             for (p in w.soundPaths) playSound(p)
         }
-        busy = false
     }
 
     private fun playSound(path: String) {
@@ -153,7 +186,6 @@ class ScreenAlertService : Service() {
         t = t.replace(Regex("[ىئي]"), "ي")
         t = t.replace("ة", "ه")
         t = t.replace("ک", "ك")
-        t = t.replace(Regex("\\s+"), " ")
         return t.trim().lowercase()
     }
 
