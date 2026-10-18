@@ -1,5 +1,8 @@
 package com.example.screenalert
 
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,6 +18,23 @@ import androidx.compose.ui.unit.dp
 import java.io.File
 import java.util.UUID
 
+// دالة لتشغيل الصوت وقت التجربة
+fun testSound(ctx: Context, path: String) {
+    try {
+        val mp = MediaPlayer()
+        mp.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .build()
+        )
+        mp.setDataSource(path)
+        mp.setOnCompletionListener { it.release() }
+        mp.prepare()
+        mp.start()
+    } catch (_: Exception) { }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScreen(repo: ConfigRepository, onStart: () -> Unit) {
@@ -23,7 +43,7 @@ fun AppScreen(repo: ConfigRepository, onStart: () -> Unit) {
     var editing by remember { mutableStateOf<WordEntry?>(null) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Screen Word Alert") }) },
+        topBar = { TopAppBar(title = { Text("ارتباك") }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { editing = null; showAdd = true },
@@ -33,16 +53,19 @@ fun AppScreen(repo: ConfigRepository, onStart: () -> Unit) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().padding(16.dp)) {
-            Button(onClick = onStart,
+            Button(
+                onClick = onStart,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
             ) { Text("▶ ابدأ المراقبة") }
+
             Spacer(Modifier.height(12.dp))
             Text("الكلمات (${list.size})", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
+
             if (list.isEmpty()) {
-                Text("ما في كلمات. اضغط + حتى تضيف.",
-                    style = MaterialTheme.typography.bodySmall)
+                Text("ما في كلمات. اضغط + حتى تضيف.", style = MaterialTheme.typography.bodySmall)
             }
+
             LazyColumn(Modifier.fillMaxSize()) {
                 items(list) { w ->
                     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -69,7 +92,9 @@ fun AppScreen(repo: ConfigRepository, onStart: () -> Unit) {
                                     nl.remove(w)
                                     list = nl
                                     repo.save(nl)
-                                }) { Text("حذف", color = MaterialTheme.colorScheme.error) }
+                                }) {
+                                    Text("حذف", color = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
                     }
@@ -98,8 +123,10 @@ fun AppScreen(repo: ConfigRepository, onStart: () -> Unit) {
 
 @Composable
 fun WordEditorDialog(
-    initial: WordEntry?, repo: ConfigRepository,
-    onDismiss: () -> Unit, onSave: (WordEntry) -> Unit,
+    initial: WordEntry?,
+    repo: ConfigRepository,
+    onDismiss: () -> Unit,
+    onSave: (WordEntry) -> Unit,
 ) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf(initial?.text ?: "") }
@@ -110,10 +137,15 @@ fun WordEditorDialog(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
-        val name = ctx.contentResolver.getType(uri)?.let {
-            if (it.contains("mpeg")) ".mp3" else ".wav"
-        } ?: ".wav"
-        val dest = File(repo.soundsDir(), "${UUID.randomUUID()}$name")
+        val mime = ctx.contentResolver.getType(uri) ?: "audio/mpeg"
+        val ext = when {
+            mime.contains("mpeg") || mime.contains("mp3") -> ".mp3"
+            mime.contains("wav") -> ".wav"
+            mime.contains("ogg") -> ".ogg"
+            mime.contains("m4a") || mime.contains("mp4") -> ".m4a"
+            else -> ".mp3"
+        }
+        val dest = File(repo.soundsDir(), "${UUID.randomUUID()}$ext")
         try {
             ctx.contentResolver.openInputStream(uri)?.use { inp ->
                 dest.outputStream().use { out -> inp.copyTo(out) }
@@ -127,33 +159,42 @@ fun WordEditorDialog(
         title = { Text(if (initial == null) "كلمة جديدة" else "تعديل") },
         text = {
             Column {
-                OutlinedTextField(value = text, onValueChange = { text = it },
-                    label = { Text("الكلمة أو الاسم") }, singleLine = true)
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("الكلمة أو الاسم") },
+                    singleLine = true
+                )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = cooldown,
+                OutlinedTextField(
+                    value = cooldown,
                     onValueChange = { cooldown = it.filter { c -> c.isDigit() } },
-                    label = { Text("Cooldown (ثواني)") }, singleLine = true)
+                    label = { Text("Cooldown (ثواني)") },
+                    singleLine = true
+                )
                 Spacer(Modifier.height(8.dp))
-                Text("الأصوات (${paths.size})",
-                    style = MaterialTheme.typography.labelLarge)
+                Text("الأصوات (${paths.size})", style = MaterialTheme.typography.labelLarge)
                 paths.forEach { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(File(p).name, modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall)
+                        Text(File(p).name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { testSound(ctx, p) }) { Text("▶ تجربة") }
                         TextButton(onClick = { paths = paths - p }) { Text("حذف") }
                     }
                 }
                 OutlinedButton(
                     onClick = { pickSound.launch(arrayOf("audio/*")) },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("+ إضافة صوت") }
+                ) { Text("+ إضافة صوت من الجهاز") }
             }
         },
         confirmButton = {
-            TextButton(enabled = text.isNotBlank(), onClick = {
-                val cd = cooldown.toIntOrNull() ?: 15
-                onSave(WordEntry(text.trim(), paths, cd, initial?.enabled ?: true))
-            }) { Text("حفظ") }
+            TextButton(
+                enabled = text.isNotBlank(),
+                onClick = {
+                    val cd = cooldown.toIntOrNull() ?: 15
+                    onSave(WordEntry(text.trim(), paths, cd, initial?.enabled ?: true))
+                }
+            ) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
