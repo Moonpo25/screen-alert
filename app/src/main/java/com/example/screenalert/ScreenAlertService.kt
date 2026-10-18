@@ -19,7 +19,6 @@ import android.util.DisplayMetrics
 import android.view.WindowManager
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.arabic.ArabicTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.text.Normalizer
 
@@ -31,9 +30,7 @@ class ScreenAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var busy = false
     private val lastPlayed = mutableMapOf<String, Long>()
-    private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    private val arabic = TextRecognition.getClient(
-        ArabicTextRecognizerOptions.Builder().build())
+    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -42,8 +39,12 @@ class ScreenAlertService : Service() {
         repo = ConfigRepository(this)
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel("alert", "Screen Alert",
-                NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    "alert", "Screen Alert",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
         }
     }
 
@@ -55,11 +56,12 @@ class ScreenAlertService : Service() {
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else { startForeground(1, notif) }
+        } else {
+            startForeground(1, notif)
+        }
 
         val code = intent?.getIntExtra("resultCode", 0) ?: 0
-        val data = intent?.getParcelableExtra<Intent>("resultData")
-            ?: return START_NOT_STICKY
+        val data = intent?.getParcelableExtra<Intent>("resultData") ?: return START_NOT_STICKY
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = mpm.getMediaProjection(code, data)
         projection?.registerCallback(object : MediaProjection.Callback() {
@@ -80,7 +82,8 @@ class ScreenAlertService : Service() {
         virtualDisplay = projection?.createVirtualDisplay(
             "ScreenAlert", sw, sh, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null, handler)
+            imageReader!!.surface, null, handler
+        )
         imageReader?.setOnImageAvailableListener({ reader ->
             if (busy) {
                 reader.acquireLatestImage()?.close()
@@ -97,7 +100,11 @@ class ScreenAlertService : Service() {
                 bmp.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(bmp, 0, 0, sw, sh)
                 processBitmap(cropped)
-            } catch (_: Exception) { busy = false } finally { img.close() }
+            } catch (_: Exception) {
+                busy = false
+            } finally {
+                img.close()
+            }
         }, handler)
     }
 
@@ -105,15 +112,13 @@ class ScreenAlertService : Service() {
         val words = repo.load().filter { it.enabled }
         if (words.isEmpty()) { busy = false; return }
         val input = InputImage.fromBitmap(bmp, 0)
-        val results = StringBuilder()
-        var pending = 2
-        val done: () -> Unit = { if (--pending == 0) checkWords(results.toString(), words) }
-        arabic.process(input)
-            .addOnSuccessListener { results.append(normalize(it.text)).append(' ') }
-            .addOnCompleteListener { done() }
-        latin.process(input)
-            .addOnSuccessListener { results.append(normalize(it.text)).append(' ') }
-            .addOnCompleteListener { done() }
+        recognizer.process(input)
+            .addOnSuccessListener { result ->
+                checkWords(normalize(result.text), words)
+            }
+            .addOnFailureListener {
+                busy = false
+            }
     }
 
     private fun checkWords(ocr: String, words: List<WordEntry>) {
@@ -135,7 +140,8 @@ class ScreenAlertService : Service() {
                 setDataSource(path)
                 setOnCompletionListener { it.release() }
                 setOnErrorListener { p, _, _ -> p.release(); true }
-                prepare(); start()
+                prepare()
+                start()
             }
         } catch (_: Exception) { }
     }
@@ -152,7 +158,9 @@ class ScreenAlertService : Service() {
     }
 
     override fun onDestroy() {
-        virtualDisplay?.release(); imageReader?.close(); projection?.stop()
+        virtualDisplay?.release()
+        imageReader?.close()
+        projection?.stop()
         super.onDestroy()
     }
 }
