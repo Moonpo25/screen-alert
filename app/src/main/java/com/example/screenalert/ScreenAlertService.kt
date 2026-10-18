@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
 import android.media.ImageReader
 import android.media.MediaPlayer
 import android.media.projection.MediaProjection
@@ -41,7 +42,7 @@ class ScreenAlertService : Service() {
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(
-                    "alert", "Screen Alert",
+                    "alert", "ارتباك",
                     NotificationManager.IMPORTANCE_LOW
                 )
             )
@@ -50,7 +51,7 @@ class ScreenAlertService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notif = Notification.Builder(this, "alert")
-            .setContentTitle("Screen Alert شغال")
+            .setContentTitle("ارتباك شغال")
             .setContentText("يراقب الشاشة...")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
@@ -120,9 +121,6 @@ class ScreenAlertService : Service() {
         recognizer.process(input)
             .addOnSuccessListener { result ->
                 val text = result.text
-                // 1. تحديث الإشعار عشان نشوف شنو التطبيق قاري بالضبط
-                showDebugNotification(text)
-                // 2. فحص الكلمات
                 try {
                     checkWords(normalize(text), words)
                 } finally {
@@ -136,24 +134,8 @@ class ScreenAlertService : Service() {
             }
     }
 
-    private fun showDebugNotification(text: String) {
-        try {
-            val debugText = if (text.isBlank()) "لم يتم قراءة أي نص (شاشة سودة؟)" else text.take(100)
-            val debugNotif = Notification.Builder(this, "alert")
-                .setContentTitle("النص اللي شافه التطبيق:")
-                .setContentText(debugText)
-                .setStyle(Notification.BigTextStyle().bigText(debugText))
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                .build()
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.notify(2, debugNotif)
-        } catch (_: Exception) { }
-    }
-
     private fun checkWords(ocr: String, words: List<WordEntry>) {
         val now = System.currentTimeMillis()
-        
-        // هسه نشيل كل المسافات من النص اللي التطبيق قراه
         val cleanOcr = ocr.replace(Regex("\\s+"), "")
 
         for (w in words) {
@@ -169,7 +151,16 @@ class ScreenAlertService : Service() {
 
     private fun playSound(path: String) {
         try {
+            val file = java.io.File(path)
+            if (!file.exists()) return
+            
             MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_ALARM) // يشتغل حتى لو التليفون صامت
+                        .build()
+                )
                 setDataSource(path)
                 setOnCompletionListener { it.release() }
                 setOnErrorListener { p, _, _ -> p.release(); true }
