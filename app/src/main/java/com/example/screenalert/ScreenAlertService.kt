@@ -4,6 +4,10 @@ import android.app.*
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -65,13 +69,15 @@ class ScreenAlertService : Service() {
             }
             tessApi = TessBaseAPI()
             tessApi?.init(dataPath, "ara+eng")
+            
+            // تحسين إعدادات Tesseract عشان يقرأ النصوص المتناثرة (مثل الشاشات)
+            tessApi?.pageSegMode = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // إنشاء الإشعار الدائم
         updateNotification("يراقب الشاشة...")
         
         if (Build.VERSION.SDK_INT >= 29) {
@@ -91,7 +97,6 @@ class ScreenAlertService : Service() {
         return START_NOT_STICKY
     }
 
-    // دالة مساعدة لإنشاء الإشعار
     private fun getNotification(text: String): Notification {
         return Notification.Builder(this, "alert")
             .setContentTitle("ارتباك شغال")
@@ -100,7 +105,6 @@ class ScreenAlertService : Service() {
             .build()
     }
 
-    // دالة تحديث الإشعار الدائم
     private fun updateNotification(text: String) {
         try {
             val nm = getSystemService(NotificationManager::class.java)
@@ -113,8 +117,11 @@ class ScreenAlertService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
-        val sw = (metrics.widthPixels * 0.6).toInt()
-        val sh = (metrics.heightPixels * 0.6).toInt()
+        
+        // التعديل هنا: رجعنا الدقة كاملة 100% بدل 60% عشان الحروف تكون واضحة
+        val sw = metrics.widthPixels
+        val sh = metrics.heightPixels
+        
         imageReader = ImageReader.newInstance(sw, sh, PixelFormat.RGBA_8888, 2)
         virtualDisplay = projection?.createVirtualDisplay(
             "ScreenAlert", sw, sh, metrics.densityDpi,
@@ -136,8 +143,22 @@ class ScreenAlertService : Service() {
                 val bmp = Bitmap.createBitmap(bmpW, sh, Bitmap.Config.ARGB_8888)
                 bmp.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(bmp, 0, 0, sw, sh)
-                processBitmap(cropped)
+                
+                // تحويل الصورة لأبيض وأسود (Grayscale) عشان تسهل القراءة
+                val grayBmp = Bitmap.createBitmap(cropped.width, cropped.height, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(grayBmp)
+                val paint = Paint()
+                val colorMatrix = ColorMatrix()
+                colorMatrix.setSaturation(0f) // 0 يعني إزالة الألوان
+                paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+                canvas.drawBitmap(cropped, 0f, 0f, paint)
+
+                processBitmap(grayBmp)
+                
+                // تنظيف الذاكرة
                 bmp.recycle()
+                cropped.recycle()
+                grayBmp.recycle()
             } catch (_: Exception) {
                 busy = false
             } finally {
@@ -149,7 +170,6 @@ class ScreenAlertService : Service() {
     private fun processBitmap(bmp: Bitmap) {
         val words = repo.load().filter { it.enabled }
         if (words.isEmpty()) {
-            bmp.recycle()
             busy = false
             return
         }
@@ -159,14 +179,11 @@ class ScreenAlertService : Service() {
             val text = tessApi?.utF8Text ?: ""
             tessApi?.clear()
             
-            // نرجع النص الممسوح
             val normalizedText = normalize(text)
             val found = checkWords(normalizedText, words)
             
             if (found != null) {
-                // تحديث الإشعار الدائم عشان يبين للمستخدم
                 updateNotification("✅ تم رصد: $found")
-                // إعادة الإشعار لوضع المراقبة بعد 5 ثواني
                 handler.postDelayed({
                     updateNotification("يراقب الشاشة...")
                 }, 5000)
@@ -175,13 +192,11 @@ class ScreenAlertService : Service() {
             e.printStackTrace()
         } finally {
             busy = false
-            bmp.recycle()
         }
     }
 
     private fun checkWords(ocr: String, words: List<WordEntry>): String? {
         val now = System.currentTimeMillis()
-        // نشيل كل المسافات من النص اللي قاريه
         val cleanOcr = ocr.replace(Regex("\\s+"), "")
         var foundWord: String? = null
 
@@ -192,7 +207,6 @@ class ScreenAlertService : Service() {
             foundWord = w.text
 
             val last = lastPlayed[w.text] ?: 0L
-            // إذا مر وقت الكول داون، يشغل الصوت
             if (now - last >= w.cooldown * 1000L) {
                 lastPlayed[w.text] = now
                 for (p in w.soundPaths) {
