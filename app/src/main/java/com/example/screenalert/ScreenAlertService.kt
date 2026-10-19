@@ -32,7 +32,6 @@ class ScreenAlertService : Service() {
     private var busy = false
     private val lastPlayed = mutableMapOf<String, Long>()
     
-    // محرك Tesseract
     private var tessApi: TessBaseAPI? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,13 +49,11 @@ class ScreenAlertService : Service() {
             )
         }
         
-        // تهيئة محرك Tesseract
         try {
             val dataPath = filesDir.absolutePath
             val tessDataDir = File(dataPath, "tessdata")
             if (!tessDataDir.exists()) {
                 tessDataDir.mkdirs()
-                // نسخ ملفات اللغة من الـ Assets إلى الذاكرة الداخلية
                 val assetsList = assets.list("tessdata") ?: emptyArray()
                 for (file in assetsList) {
                     val inStream = assets.open("tessdata/$file")
@@ -74,15 +71,13 @@ class ScreenAlertService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notif = Notification.Builder(this, "alert")
-            .setContentTitle("ارتباك شغال")
-            .setContentText("يراقب الشاشة...")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .build()
+        // إنشاء الإشعار الدائم
+        updateNotification("يراقب الشاشة...")
+        
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            startForeground(1, getNotification("يراقب الشاشة..."), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
-            startForeground(1, notif)
+            startForeground(1, getNotification("يراقب الشاشة..."))
         }
 
         val code = intent?.getIntExtra("resultCode", 0) ?: 0
@@ -94,6 +89,23 @@ class ScreenAlertService : Service() {
         }, handler)
         startCapture()
         return START_NOT_STICKY
+    }
+
+    // دالة مساعدة لإنشاء الإشعار
+    private fun getNotification(text: String): Notification {
+        return Notification.Builder(this, "alert")
+            .setContentTitle("ارتباك شغال")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .build()
+    }
+
+    // دالة تحديث الإشعار الدائم
+    private fun updateNotification(text: String) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(1, getNotification(text))
+        } catch (_: Exception) { }
     }
 
     private fun startCapture() {
@@ -147,8 +159,18 @@ class ScreenAlertService : Service() {
             val text = tessApi?.utF8Text ?: ""
             tessApi?.clear()
             
-            val found = checkWords(normalize(text), words)
-            if (found != null) showFoundNotification(found)
+            // نرجع النص الممسوح
+            val normalizedText = normalize(text)
+            val found = checkWords(normalizedText, words)
+            
+            if (found != null) {
+                // تحديث الإشعار الدائم عشان يبين للمستخدم
+                updateNotification("✅ تم رصد: $found")
+                // إعادة الإشعار لوضع المراقبة بعد 5 ثواني
+                handler.postDelayed({
+                    updateNotification("يراقب الشاشة...")
+                }, 5000)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -157,36 +179,28 @@ class ScreenAlertService : Service() {
         }
     }
 
-    private fun showFoundNotification(word: String) {
-        try {
-            val nm = getSystemService(NotificationManager::class.java)
-            val builder = Notification.Builder(this, "alert")
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                .setContentTitle("✅ تم رصد: $word")
-                .setContentText("جاري تشغيل التنبيه الصوتي...")
-            
-            nm.notify(2, builder.build())
-        } catch (_: Exception) { }
-    }
-
     private fun checkWords(ocr: String, words: List<WordEntry>): String? {
         val now = System.currentTimeMillis()
+        // نشيل كل المسافات من النص اللي قاريه
         val cleanOcr = ocr.replace(Regex("\\s+"), "")
-        var found: String? = null
+        var foundWord: String? = null
 
         for (w in words) {
             val cleanKey = normalize(w.text).replace(Regex("\\s+"), "")
             if (cleanKey.isBlank() || !cleanOcr.contains(cleanKey)) continue
             
-            found = w.text
+            foundWord = w.text
 
             val last = lastPlayed[w.text] ?: 0L
-            if (now - last < w.cooldown * 1000L) continue
-            lastPlayed[w.text] = now
-            
-            for (p in w.soundPaths) playSound(p)
+            // إذا مر وقت الكول داون، يشغل الصوت
+            if (now - last >= w.cooldown * 1000L) {
+                lastPlayed[w.text] = now
+                for (p in w.soundPaths) {
+                    playSound(p)
+                }
+            }
         }
-        return found
+        return foundWord
     }
 
     private fun playSound(path: String) {
