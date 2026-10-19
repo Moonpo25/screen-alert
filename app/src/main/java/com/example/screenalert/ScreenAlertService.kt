@@ -129,7 +129,7 @@ class ScreenAlertService : Service() {
         try {
             // استخدام Tesseract لقراءة النص
             tessApi?.setImage(bmp)
-            val text = tessApi?.utF8Text ?: ""
+            val text = tessApi?.getUTF8Text() ?: ""
             tessApi?.clear()
             
             val found = checkWords(normalize(text), words)
