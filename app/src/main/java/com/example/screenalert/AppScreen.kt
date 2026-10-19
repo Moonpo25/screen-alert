@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -17,23 +18,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.io.File
 import java.util.UUID
-
-// دالة لتشغيل الصوت وقت التجربة
-fun testSound(ctx: Context, path: String) {
-    try {
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .build()
-        )
-        mp.setDataSource(path)
-        mp.setOnCompletionListener { it.release() }
-        mp.prepare()
-        mp.start()
-    } catch (_: Exception) { }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -133,6 +117,53 @@ fun WordEditorDialog(
     var cooldown by remember { mutableStateOf((initial?.cooldown ?: 15).toString()) }
     var paths by remember { mutableStateOf(initial?.soundPaths ?: emptyList()) }
 
+    var playingPath by remember { mutableStateOf<String?>(null) }
+    var testPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    fun stopTestSound() {
+        try {
+            testPlayer?.stop()
+            testPlayer?.release()
+        } catch (_: Exception) { }
+        testPlayer = null
+        playingPath = null
+    }
+
+    fun playTestSound(path: String) {
+        if (playingPath == path) {
+            stopTestSound()
+            return
+        }
+        stopTestSound()
+        
+        try {
+            val file = File(path)
+            if (!file.exists()) {
+                Toast.makeText(ctx, "الملف غير موجود!", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(AudioAttributes.USAGE_MEDIA) 
+                    .build()
+            )
+            mp.setDataSource(path)
+            mp.setOnCompletionListener { stopTestSound() } 
+            mp.prepare()
+            mp.start()
+            testPlayer = mp
+            playingPath = path
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "خطأ بالصوت: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { stopTestSound() }
+    }
+
     val pickSound = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -151,11 +182,13 @@ fun WordEditorDialog(
                 dest.outputStream().use { out -> inp.copyTo(out) }
             }
             paths = paths + dest.absolutePath
-        } catch (_: Exception) { }
+        } catch (e: Exception) { 
+            Toast.makeText(ctx, "فشل نسخ الملف: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { stopTestSound(); onDismiss() },
         title = { Text(if (initial == null) "كلمة جديدة" else "تعديل") },
         text = {
             Column {
@@ -177,8 +210,15 @@ fun WordEditorDialog(
                 paths.forEach { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(File(p).name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { testSound(ctx, p) }) { Text("▶ تجربة") }
-                        TextButton(onClick = { paths = paths - p }) { Text("حذف") }
+                        
+                        TextButton(onClick = { playTestSound(p) }) { 
+                            Text(if (playingPath == p) "⏹ إيقاف" else "▶ تجربة") 
+                        }
+                        
+                        TextButton(onClick = { 
+                            if (playingPath == p) stopTestSound()
+                            paths = paths - p 
+                        }) { Text("حذف") }
                     }
                 }
                 OutlinedButton(
@@ -191,11 +231,12 @@ fun WordEditorDialog(
             TextButton(
                 enabled = text.isNotBlank(),
                 onClick = {
+                    stopTestSound()
                     val cd = cooldown.toIntOrNull() ?: 15
                     onSave(WordEntry(text.trim(), paths, cd, initial?.enabled ?: true))
                 }
             ) { Text("حفظ") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+        dismissButton = { TextButton(onClick = { stopTestSound(); onDismiss() }) { Text("إلغاء") } }
     )
 }
