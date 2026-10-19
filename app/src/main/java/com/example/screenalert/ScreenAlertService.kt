@@ -18,10 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.arabic.ArabicTextRecognizerOptions
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import cz.adaptech.tesseract4android.TessBaseAPI
 import java.text.Normalizer
 
 class ScreenAlertService : Service() {
@@ -32,10 +29,9 @@ class ScreenAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var busy = false
     private val lastPlayed = mutableMapOf<String, Long>()
-
-    // محركين: واحد للعربي وواحد للإنجليزي
-    private val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    private val arabicRecognizer = TextRecognition.getClient(ArabicTextRecognizerOptions.Builder().build())
+    
+    // محرك Tesseract
+    private var tessApi: TessBaseAPI? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -50,6 +46,14 @@ class ScreenAlertService : Service() {
                     NotificationManager.IMPORTANCE_LOW
                 )
             )
+        }
+        
+        // تهيئة محرك Tesseract للعربي والإنجليزي
+        try {
+            tessApi = TessBaseAPI()
+            tessApi?.init(assets, "tessdata", "ara+eng")
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -121,33 +125,21 @@ class ScreenAlertService : Service() {
             busy = false
             return
         }
-        val input = InputImage.fromBitmap(bmp, 0)
-        
-        // هنا راح نجمع النص من المحركين سوية
-        val combinedText = StringBuilder()
-        var pendingTasks = 2 // عندنا مهمتين (عربي وإنجليزي)
-        
-        val onAllDone = {
-            if (--pendingTasks == 0) {
-                try {
-                    val found = checkWords(normalize(combinedText.toString()), words)
-                    if (found != null) showFoundNotification(found)
-                } finally {
-                    busy = false
-                    bmp.recycle()
-                }
-            }
+
+        try {
+            // استخدام Tesseract لقراءة النص
+            tessApi?.setImage(bmp)
+            val text = tessApi?.utF8Text ?: ""
+            tessApi?.clear()
+            
+            val found = checkWords(normalize(text), words)
+            if (found != null) showFoundNotification(found)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            busy = false
+            bmp.recycle()
         }
-
-        // 1. قراءة الإنجليزي
-        latinRecognizer.process(input)
-            .addOnSuccessListener { combinedText.append(it.text).append(" ") }
-            .addOnCompleteListener { onAllDone() }
-
-        // 2. قراءة العربي
-        arabicRecognizer.process(input)
-            .addOnSuccessListener { combinedText.append(it.text).append(" ") }
-            .addOnCompleteListener { onAllDone() }
     }
 
     private fun showFoundNotification(word: String) {
@@ -217,6 +209,7 @@ class ScreenAlertService : Service() {
         virtualDisplay?.release()
         imageReader?.close()
         projection?.stop()
+        tessApi?.end()
         super.onDestroy()
     }
 }
