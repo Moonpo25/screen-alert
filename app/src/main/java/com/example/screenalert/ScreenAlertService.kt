@@ -102,4 +102,113 @@ class ScreenAlertService : Service() {
             if (img == null) { busy = false; return@setOnImageAvailableListener }
             try {
                 val plane = img.planes[0]
-                val rowPadding = plane
+                val rowPadding = plane.rowStride - plane.pixelStride * sw
+                val bmpW = sw + rowPadding / plane.pixelStride
+                val bmp = Bitmap.createBitmap(bmpW, sh, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(plane.buffer)
+                val cropped = Bitmap.createBitmap(bmp, 0, 0, sw, sh)
+                processBitmap(cropped)
+                bmp.recycle()
+            } catch (_: Exception) {
+                busy = false
+            } finally {
+                img.close()
+            }
+        }, handler)
+    }
+
+    private fun processBitmap(bmp: Bitmap) {
+        val words = repo.load().filter { it.enabled }
+        if (words.isEmpty()) {
+            bmp.recycle()
+            busy = false
+            return
+        }
+
+        try {
+            tessApi?.setImage(bmp)
+            // هنا التعديل: استخدمنا utF8Text بدل getUTF8Text
+            val text = tessApi?.utF8Text ?: ""
+            tessApi?.clear()
+            
+            val found = checkWords(normalize(text), words)
+            if (found != null) showFoundNotification(found)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            busy = false
+            bmp.recycle()
+        }
+    }
+
+    private fun showFoundNotification(word: String) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            val builder = Notification.Builder(this, "alert")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setContentTitle("✅ تم رصد: $word")
+                .setContentText("جاري تشغيل التنبيه الصوتي...")
+            
+            nm.notify(2, builder.build())
+        } catch (_: Exception) { }
+    }
+
+    private fun checkWords(ocr: String, words: List<WordEntry>): String? {
+        val now = System.currentTimeMillis()
+        val cleanOcr = ocr.replace(Regex("\\s+"), "")
+        var found: String? = null
+
+        for (w in words) {
+            val cleanKey = normalize(w.text).replace(Regex("\\s+"), "")
+            if (cleanKey.isBlank() || !cleanOcr.contains(cleanKey)) continue
+            
+            found = w.text
+
+            val last = lastPlayed[w.text] ?: 0L
+            if (now - last < w.cooldown * 1000L) continue
+            lastPlayed[w.text] = now
+            
+            for (p in w.soundPaths) playSound(p)
+        }
+        return found
+    }
+
+    private fun playSound(path: String) {
+        try {
+            val file = java.io.File(path)
+            if (!file.exists()) return
+            
+            MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA) 
+                        .build()
+                )
+                setDataSource(path)
+                setOnCompletionListener { it.release() }
+                setOnErrorListener { p, _, _ -> p.release(); true }
+                prepare()
+                start()
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun normalize(s: String): String {
+        var t = Normalizer.normalize(s, Normalizer.Form.NFD)
+        t = t.replace(Regex("[\\u064B-\\u065F\\u0670\\u0640]"), "")
+        t = t.replace(Regex("[إأآٱا]"), "ا")
+        t = t.replace(Regex("[ىئي]"), "ي")
+        t = t.replace("ة", "ه")
+        t = t.replace("ک", "ك")
+        return t.trim().lowercase()
+    }
+
+    override fun onDestroy() {
+        virtualDisplay?.release()
+        imageReader?.close()
+        projection?.stop()
+        tessApi?.end()
+        super.onDestroy()
+    }
+}
