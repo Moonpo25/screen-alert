@@ -48,6 +48,7 @@ class ScreenAlertService : Service() {
             )
         }
         
+        // تهيئة محرك Tesseract
         try {
             tessApi = TessBaseAPI()
             tessApi?.init(assets, "tessdata", "ara+eng")
@@ -127,8 +128,8 @@ class ScreenAlertService : Service() {
 
         try {
             tessApi?.setImage(bmp)
-            // هنا التعديل: استخدمنا utF8Text بدل getUTF8Text
-            val text = tessApi?.utF8Text ?: ""
+            // استخدام getUTF8Text بدل utF8Text
+            val text = tessApi?.getUTF8Text() ?: ""
             tessApi?.clear()
             
             val found = checkWords(normalize(text), words)
