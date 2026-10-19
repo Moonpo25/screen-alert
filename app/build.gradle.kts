@@ -33,8 +33,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     
-    // محرك Tesseract لقراءة العربي والإنجليزي
-    implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
+    // محرك Tesseract (النسخة الأحدث 4.8.0)
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.8.0")
     
     implementation("com.google.code.gson:gson:2.10.1")
 }
