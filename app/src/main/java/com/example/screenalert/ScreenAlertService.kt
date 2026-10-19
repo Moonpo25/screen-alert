@@ -18,7 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import cz.adaptech.tesseract4android.TessBaseAPI
+import com.googlecode.tesseract.android.TessBaseAPI // تم تصحيح اسم الباكيج هنا
 import java.text.Normalizer
 
 class ScreenAlertService : Service() {
@@ -128,8 +128,7 @@ class ScreenAlertService : Service() {
 
         try {
             tessApi?.setImage(bmp)
-            // استخدام getUTF8Text بدل utF8Text
-            val text = tessApi?.getUTF8Text() ?: ""
+            val text = tessApi?.utF8Text ?: ""
             tessApi?.clear()
             
             val found = checkWords(normalize(text), words)
