@@ -18,7 +18,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import com.googlecode.tesseract.android.TessBaseAPI // تم تصحيح اسم الباكيج هنا
+import com.googlecode.tesseract.android.TessBaseAPI
+import java.io.File
+import java.io.FileOutputStream
 import java.text.Normalizer
 
 class ScreenAlertService : Service() {
@@ -50,8 +52,22 @@ class ScreenAlertService : Service() {
         
         // تهيئة محرك Tesseract
         try {
+            val dataPath = filesDir.absolutePath
+            val tessDataDir = File(dataPath, "tessdata")
+            if (!tessDataDir.exists()) {
+                tessDataDir.mkdirs()
+                // نسخ ملفات اللغة من الـ Assets إلى الذاكرة الداخلية
+                val assetsList = assets.list("tessdata") ?: emptyArray()
+                for (file in assetsList) {
+                    val inStream = assets.open("tessdata/$file")
+                    val outStream = FileOutputStream(File(tessDataDir, file))
+                    inStream.copyTo(outStream)
+                    inStream.close()
+                    outStream.close()
+                }
+            }
             tessApi = TessBaseAPI()
-            tessApi?.init(assets, "tessdata", "ara+eng")
+            tessApi?.init(dataPath, "ara+eng")
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -175,7 +191,7 @@ class ScreenAlertService : Service() {
 
     private fun playSound(path: String) {
         try {
-            val file = java.io.File(path)
+            val file = File(path)
             if (!file.exists()) return
             
             MediaPlayer().apply {
@@ -208,7 +224,7 @@ class ScreenAlertService : Service() {
         virtualDisplay?.release()
         imageReader?.close()
         projection?.stop()
-        tessApi?.end()
+        tessApi?.clear()
         super.onDestroy()
     }
 }
