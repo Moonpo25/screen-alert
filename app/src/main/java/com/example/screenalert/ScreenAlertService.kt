@@ -122,7 +122,8 @@ class ScreenAlertService : Service() {
             .addOnSuccessListener { result ->
                 val text = result.text
                 try {
-                    checkWords(normalize(text), words)
+                    val found = checkWords(normalize(text), words)
+                    showDebugNotification(text, found)
                 } finally {
                     busy = false
                     bmp.recycle()
@@ -134,19 +135,44 @@ class ScreenAlertService : Service() {
             }
     }
 
-    private fun checkWords(ocr: String, words: List<WordEntry>) {
+    private fun showDebugNotification(text: String, foundWord: String?) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            val builder = Notification.Builder(this, "alert")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+
+            if (foundWord != null) {
+                builder.setContentTitle("✅ تم رصد: $foundWord")
+            } else {
+                builder.setContentTitle("آخر نص مقروء:")
+            }
+
+            val debugText = if (text.isBlank()) "لم يتم قراءة أي نص" else text.take(100)
+            builder.setContentText(debugText)
+            builder.setStyle(Notification.BigTextStyle().bigText(debugText))
+            
+            nm.notify(2, builder.build())
+        } catch (_: Exception) { }
+    }
+
+    private fun checkWords(ocr: String, words: List<WordEntry>): String? {
         val now = System.currentTimeMillis()
         val cleanOcr = ocr.replace(Regex("\\s+"), "")
+        var found: String? = null
 
         for (w in words) {
             val cleanKey = normalize(w.text).replace(Regex("\\s+"), "")
             if (cleanKey.isBlank() || !cleanOcr.contains(cleanKey)) continue
             
+            found = w.text
+
             val last = lastPlayed[w.text] ?: 0L
             if (now - last < w.cooldown * 1000L) continue
             lastPlayed[w.text] = now
+            
             for (p in w.soundPaths) playSound(p)
         }
+        return found
     }
 
     private fun playSound(path: String) {
@@ -158,7 +184,7 @@ class ScreenAlertService : Service() {
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setUsage(AudioAttributes.USAGE_ALARM) // يشتغل حتى لو التليفون صامت
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION) 
                         .build()
                 )
                 setDataSource(path)
