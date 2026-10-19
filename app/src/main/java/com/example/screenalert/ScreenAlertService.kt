@@ -48,9 +48,9 @@ class ScreenAlertService : Service() {
             )
         }
         
-        // تهيئة محرك Tesseract للعربي والإنجليزي
+        // تم تصحيح السطر هنا: TessBaseAPI() بدون this
         try {
-            tessApi = TessBaseAPI(this)
+            tessApi = TessBaseAPI()
             tessApi?.init(assets, "tessdata", "ara+eng")
         } catch (e: Exception) {
             e.printStackTrace()
@@ -127,7 +127,6 @@ class ScreenAlertService : Service() {
         }
 
         try {
-            // استخدام Tesseract لقراءة النص (تم تصحيح اسم الدالة هنا)
             tessApi?.setImage(bmp)
             val text = tessApi?.getUTF8Text() ?: ""
             tessApi?.clear()
