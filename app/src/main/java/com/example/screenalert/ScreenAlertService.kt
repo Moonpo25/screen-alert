@@ -18,6 +18,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
@@ -32,10 +33,12 @@ class ScreenAlertService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private lateinit var repo: ConfigRepository
-    private val handler = Handler(Looper.getMainLooper())
-    private var busy = false
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val lastPlayed = mutableMapOf<String, Long>()
     
+    private lateinit var bgThread: HandlerThread
+    private lateinit var bgHandler: Handler
+
     private var tessApi: TessBaseAPI? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -43,6 +46,10 @@ class ScreenAlertService : Service() {
     override fun onCreate() {
         super.onCreate()
         repo = ConfigRepository(this)
+        
+        bgThread = HandlerThread("OCRThread").apply { start() }
+        bgHandler = Handler(bgThread.looper)
+
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
@@ -69,8 +76,6 @@ class ScreenAlertService : Service() {
             }
             tessApi = TessBaseAPI()
             tessApi?.init(dataPath, "ara+eng")
-            
-            // تحسين إعدادات Tesseract عشان يقرأ النصوص المتناثرة (مثل الشاشات)
             tessApi?.pageSegMode = TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK
         } catch (e: Exception) {
             e.printStackTrace()
@@ -92,7 +97,7 @@ class ScreenAlertService : Service() {
         projection = mpm.getMediaProjection(code, data)
         projection?.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() { stopSelf() }
-        }, handler)
+        }, mainHandler)
         startCapture()
         return START_NOT_STICKY
     }
@@ -118,24 +123,19 @@ class ScreenAlertService : Service() {
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
         
-        // التعديل هنا: رجعنا الدقة كاملة 100% بدل 60% عشان الحروف تكون واضحة
-        val sw = metrics.widthPixels
-        val sh = metrics.heightPixels
+        val sw = (metrics.widthPixels * 0.75).toInt()
+        val sh = (metrics.heightPixels * 0.75).toInt()
         
         imageReader = ImageReader.newInstance(sw, sh, PixelFormat.RGBA_8888, 2)
         virtualDisplay = projection?.createVirtualDisplay(
             "ScreenAlert", sw, sh, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null, handler
+            imageReader!!.surface, null, mainHandler
         )
+        
         imageReader?.setOnImageAvailableListener({ reader ->
-            if (busy) {
-                reader.acquireLatestImage()?.close()
-                return@setOnImageAvailableListener
-            }
-            busy = true
             val img = reader.acquireLatestImage()
-            if (img == null) { busy = false; return@setOnImageAvailableListener }
+            if (img == null) return@setOnImageAvailableListener
             try {
                 val plane = img.planes[0]
                 val rowPadding = plane.rowStride - plane.pixelStride * sw
@@ -144,35 +144,60 @@ class ScreenAlertService : Service() {
                 bmp.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(bmp, 0, 0, sw, sh)
                 
-                // تحويل الصورة لأبيض وأسود (Grayscale) عشان تسهل القراءة
+                // معالجة الصورة: تحويل لأبيض وأسود + عكس الألوان إذا كان الوضع ليلي
                 val grayBmp = Bitmap.createBitmap(cropped.width, cropped.height, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(grayBmp)
                 val paint = Paint()
                 val colorMatrix = ColorMatrix()
-                colorMatrix.setSaturation(0f) // 0 يعني إزالة الألوان
+                
+                // 1. إزالة الألوان (Grayscale)
+                colorMatrix.setSaturation(0f)
+
+                // 2. فحص إذا كانت الخلفية سودة (الوضع الليلي)
+                val pixels = IntArray(cropped.width * cropped.height)
+                cropped.getPixels(pixels, 0, cropped.width, 0, 0, cropped.width, cropped.height)
+                var sum = 0
+                var count = 0
+                // نأخذ عينة من البكسلات عشان نسرع العملية
+                for (i in 0 until pixels.size step 100) {
+                    val p = pixels[i]
+                    val r = (p shr 16) and 0xff
+                    val g = (p shr 8) and 0xff
+                    val b = p and 0xff
+                    sum += (r + g + b) / 3
+                    count++
+                }
+                val avg = if (count > 0) sum / count else 255
+
+                // إذا متوسط السطوع أقل من 128 يعني خلفية غامقة (وضع ليلي)
+                if (avg < 128) {
+                    // نعكس الألوان (نخلي الأسود أبيض والأبيض أسود)
+                    colorMatrix.set(floatArrayOf(
+                        -1f, 0f, 0f, 0f, 255f,
+                        0f, -1f, 0f, 0f, 255f,
+                        0f, 0f, -1f, 0f, 255f,
+                        0f, 0f, 0f, 1f, 0f
+                    ))
+                }
+
                 paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
                 canvas.drawBitmap(cropped, 0f, 0f, paint)
 
                 processBitmap(grayBmp)
                 
-                // تنظيف الذاكرة
                 bmp.recycle()
                 cropped.recycle()
                 grayBmp.recycle()
             } catch (_: Exception) {
-                busy = false
             } finally {
                 img.close()
             }
-        }, handler)
+        }, bgHandler)
     }
 
     private fun processBitmap(bmp: Bitmap) {
         val words = repo.load().filter { it.enabled }
-        if (words.isEmpty()) {
-            busy = false
-            return
-        }
+        if (words.isEmpty()) return
 
         try {
             tessApi?.setImage(bmp)
@@ -184,14 +209,14 @@ class ScreenAlertService : Service() {
             
             if (found != null) {
                 updateNotification("✅ تم رصد: $found")
-                handler.postDelayed({
+                mainHandler.postDelayed({
                     updateNotification("يراقب الشاشة...")
                 }, 5000)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
-            busy = false
+            Thread.sleep(800) // تأخير بسيط لراحة المعالج
         }
     }
 
@@ -253,6 +278,7 @@ class ScreenAlertService : Service() {
         imageReader?.close()
         projection?.stop()
         tessApi?.clear()
+        bgThread.quitSafely()
         super.onDestroy()
     }
 }
