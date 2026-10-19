@@ -33,10 +33,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     
-    // مكتبة النصوص الإنجليزية
+    // مكتبة النصوص الإنجليزية (16.0.1)
     implementation("com.google.mlkit:text-recognition:16.0.1")
-    // مكتبة النصوص العربية
-    implementation("com.google.mlkit:text-recognition-arabic:16.0.1")
+    // مكتبة النصوص العربية (16.0.0)
+    implementation("com.google.mlkit:text-recognition-arabic:16.0.0")
     
     implementation("com.google.code.gson:gson:2.10.1")
 }
