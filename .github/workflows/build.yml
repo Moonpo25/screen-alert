@@ -28,12 +28,18 @@ jobs:
             rm -f create.py
           fi
 
+      - name: Download Tesseract Data
+        run: |
+          mkdir -p app/src/main/assets/tessdata
+          curl -L -o app/src/main/assets/tessdata/ara.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/ara.traineddata
+          curl -L -o app/src/main/assets/tessdata/eng.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata
+
       - name: Commit generated files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --staged --quiet || git commit -m "Auto-generate Android project"
+          git diff --staged --quiet || git commit -m "Auto-generate Android project and add Tesseract data"
           git push || true
 
       - name: Setup Java 17
