@@ -20,6 +20,7 @@ import android.util.DisplayMetrics
 import android.view.WindowManager
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.arabic.ArabicTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.text.Normalizer
 
@@ -31,7 +32,10 @@ class ScreenAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var busy = false
     private val lastPlayed = mutableMapOf<String, Long>()
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+    // محركين: واحد للعربي وواحد للإنجليزي
+    private val latinRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val arabicRecognizer = TextRecognition.getClient(ArabicTextRecognizerOptions.Builder().build())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -118,38 +122,41 @@ class ScreenAlertService : Service() {
             return
         }
         val input = InputImage.fromBitmap(bmp, 0)
-        recognizer.process(input)
-            .addOnSuccessListener { result ->
-                val text = result.text
+        
+        // هنا راح نجمع النص من المحركين سوية
+        val combinedText = StringBuilder()
+        var pendingTasks = 2 // عندنا مهمتين (عربي وإنجليزي)
+        
+        val onAllDone = {
+            if (--pendingTasks == 0) {
                 try {
-                    val found = checkWords(normalize(text), words)
-                    showDebugNotification(text, found)
+                    val found = checkWords(normalize(combinedText.toString()), words)
+                    if (found != null) showFoundNotification(found)
                 } finally {
                     busy = false
                     bmp.recycle()
                 }
             }
-            .addOnFailureListener {
-                busy = false
-                bmp.recycle()
-            }
+        }
+
+        // 1. قراءة الإنجليزي
+        latinRecognizer.process(input)
+            .addOnSuccessListener { combinedText.append(it.text).append(" ") }
+            .addOnCompleteListener { onAllDone() }
+
+        // 2. قراءة العربي
+        arabicRecognizer.process(input)
+            .addOnSuccessListener { combinedText.append(it.text).append(" ") }
+            .addOnCompleteListener { onAllDone() }
     }
 
-    private fun showDebugNotification(text: String, foundWord: String?) {
+    private fun showFoundNotification(word: String) {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             val builder = Notification.Builder(this, "alert")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-
-            if (foundWord != null) {
-                builder.setContentTitle("✅ تم رصد: $foundWord")
-            } else {
-                builder.setContentTitle("آخر نص مقروء:")
-            }
-
-            val debugText = if (text.isBlank()) "لم يتم قراءة أي نص" else text.take(100)
-            builder.setContentText(debugText)
-            builder.setStyle(Notification.BigTextStyle().bigText(debugText))
+                .setContentTitle("✅ تم رصد: $word")
+                .setContentText("جاري تشغيل التنبيه الصوتي...")
             
             nm.notify(2, builder.build())
         } catch (_: Exception) { }
@@ -183,8 +190,8 @@ class ScreenAlertService : Service() {
             MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION) 
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA) 
                         .build()
                 )
                 setDataSource(path)
